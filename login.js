@@ -1,5 +1,32 @@
 const fs = require('fs');
 const puppeteer = require('puppeteer');
+const axios = require('axios');
+
+// 读取 Telegram 机器人信息
+const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
+const TG_USER_ID = process.env.TG_USER_ID;
+
+/**
+ * 发送 Telegram 消息
+ */
+async function sendTelegramMessage(message) {
+    if (!TG_BOT_TOKEN || !TG_USER_ID) {
+        console.warn('⚠️ 未设置 Telegram 机器人信息，无法发送通知');
+        return;
+    }
+
+    const url = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`;
+    try {
+        await axios.post(url, {
+            chat_id: TG_USER_ID,
+            text: message,
+            parse_mode: 'Markdown',
+        });
+        console.log('📢 已发送 Telegram 通知');
+    } catch (error) {
+        console.error('❌ 发送 Telegram 消息失败:', error.response ? error.response.data : error.message);
+    }
+}
 
 /**
  * 将时间格式化为 YYYY-MM-DD HH:mm:ss
@@ -39,8 +66,8 @@ function loadAccounts() {
 
         // 启动 Puppeteer
         const browser = await puppeteer.launch({
-            headless: false, // 显示 UI（可以改为 true 以隐藏 UI）
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] // 解决 GitHub Actions 的沙盒问题
+            headless: false,
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
         });
 
         const page = await browser.newPage();
@@ -78,7 +105,13 @@ function loadAccounts() {
                 throw new Error('❌ 登录失败，请检查账号和密码是否正确');
             }
 
-            console.log(`✅ 账号 ${username} 登录成功！`);
+            const nowUtc = formatToISO(new Date());
+            const nowBeijing = formatToISO(new Date(new Date().getTime() + 8 * 60 * 60 * 1000));
+            const successMessage = `✅ *账号 ${username} 登录成功！*\n🕒 北京时间: ${nowBeijing}\n🌎 UTC时间: ${nowUtc}`;
+            console.log(successMessage);
+
+            // 发送 Telegram 通知
+            await sendTelegramMessage(successMessage);
 
             // 随机等待 5~13 秒，模拟真人操作
             const delay1 = Math.floor(Math.random() * 8000) + 5000;
@@ -89,14 +122,16 @@ function loadAccounts() {
             const logoutButton = await page.$('#Secondary_Navbar-Account-Logout');
             if (logoutButton) {
                 await logoutButton.click();
-                const nowUtc = formatToISO(new Date());
-                const nowBeijing = formatToISO(new Date(new Date().getTime() + 8 * 60 * 60 * 1000));
-                console.log(`🔹 账号 ${username} 于北京时间 ${nowBeijing}（UTC时间 ${nowUtc}）成功登出`);
+                console.log(`🔹 账号 ${username} 已成功登出`);
             } else {
                 throw new Error('❌ 无法找到登出按钮');
             }
         } catch (error) {
-            console.error(`❌ 账号 ${username} 登录时出现错误: ${error.message}`);
+            const errorMessage = `❌ *账号 ${username} 登录失败！*\n🔻 错误信息: ${error.message}`;
+            console.error(errorMessage);
+
+            // 发送 Telegram 失败通知
+            await sendTelegramMessage(errorMessage);
         } finally {
             await page.close();
             await browser.close();
