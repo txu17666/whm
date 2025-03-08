@@ -32,9 +32,6 @@ jobs:
       - name: Create accounts.json
         run: printf '%s' "$ACCOUNTS_JSON" > accounts.json
 
-      - name: Validate accounts.json
-        run: cat accounts.json | jq .
-
       - name: Login to website
         run: |
           set -e
