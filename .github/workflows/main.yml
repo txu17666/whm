@@ -7,8 +7,6 @@ on:
 
 env:
   ACCOUNTS_JSON: ${{ secrets.WEBHOSTMOST_JSON }}
-  TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-  TG_USER_ID: ${{ secrets.TG_USER_ID }}
 
 jobs:
   login:
@@ -24,7 +22,7 @@ jobs:
           node-version: '20.x'
 
       - name: Install dependencies
-        run: npm install puppeteer axios
+        run: npm install puppeteer
 
       - name: Install missing dependencies for Puppeteer
         run: sudo apt-get update && sudo apt-get install -y libgbm-dev
@@ -39,3 +37,4 @@ jobs:
         run: |
           set -e
           xvfb-run --server-args="-screen 0 1280x1024x24" node login.js
+
