@@ -3,7 +3,7 @@ name: Login
 on:
   workflow_dispatch:
   schedule:
-    - cron: '40 8 */10 * *'
+    - cron: '00 12 */15 * *'
 
 env:
   ACCOUNTS_JSON: ${{ secrets.WEBHOSTMOST_JSON }}
