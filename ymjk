@@ -1,0 +1,225 @@
+export default {
+  // 当定时任务触发时，执行的代码
+  async scheduled(event, env) {
+    const sitename = env.SITENAME || "域名监控";
+    const webPassword = env.WEB_PASSWORD || "defaultpassword";
+    let domains = [];
+    
+    try {
+      domains = env.DOMAINS ? JSON.parse(env.DOMAINS) : [];
+      if (!Array.isArray(domains)) throw new Error("DOMAINS 变量格式错误");
+    } catch (error) {
+      console.log("DOMAINS 变量格式错误");
+      return;
+    }
+
+    const DAYS = env.DAYS || 7;  // 这里添加 DAYS 变量，如果没有设置，默认 7 天
+
+    // 每天检查并发送通知
+    await sendTelegramNotifications(domains, env, DAYS);
+  },
+
+  async fetch(request, env) {
+    const sitename = env.SITENAME || "域名监控";
+    const webPassword = env.WEB_PASSWORD || "defaultpassword";
+    let domains = [];
+    
+    try {
+      domains = env.DOMAINS ? JSON.parse(env.DOMAINS) : [];
+      if (!Array.isArray(domains)) throw new Error("DOMAINS 变量格式错误");
+    } catch (error) {
+      return new Response("DOMAINS 变量格式错误", { status: 500 });
+    }
+
+    const url = new URL(request.url);
+    const passwordParam = url.searchParams.get("password");
+
+    // 强制要求密码登录
+    if (!passwordParam || passwordParam !== webPassword) {
+      return new Response(generateLoginPage(sitename), {
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+
+    const htmlContent = await generateHTML(domains, sitename);
+    return new Response(htmlContent, {
+      headers: { "Content-Type": "text/html" },
+    });
+  },
+};
+
+// 发送 Telegram 通知的代码
+async function sendTelegramNotifications(domains, env, DAYS) {
+  if (!env.TGTOKEN || !env.TGID || !env.DOMAIN_KV) {
+    console.log("❌ 缺少 Telegram 或 KV 相关配置");
+    return;
+  }
+
+  const today = new Date();
+  for (const info of domains) {
+    const expirationDate = new Date(info.expirationDate);
+    const daysRemaining = Math.ceil((expirationDate - today) / (1000 * 60 * 60 * 24));
+    const notifyKey = `notified_${info.domain}_${info.expirationDate}`;
+
+    console.log(`正在检查域名：${info.domain}, 到期剩余天数：${daysRemaining}`);
+
+    // 检查通知条件
+    if (daysRemaining > 0 && daysRemaining <= DAYS) {
+      console.log(`通知条件满足，剩余天数：${daysRemaining}, 设定天数：${DAYS}`);
+      const lastNotified = await env.DOMAIN_KV.get(notifyKey);
+      const todayStr = today.toISOString().split("T")[0]; // 记录通知日期
+
+      if (lastNotified !== todayStr) {
+        console.log(`发送通知给：${info.domain}`);
+        await sendTelegramMessage(env.TGTOKEN, env.TGID, formatMessage(info, daysRemaining));
+        await env.DOMAIN_KV.put(notifyKey, todayStr, { expirationTtl: 86400 * DAYS }); // 记录当天已通知
+      }
+    } else {
+      console.log(`通知条件不满足，剩余天数：${daysRemaining}, 设定天数：${DAYS}`);
+    }
+
+    // 处理已过期的域名（只通知一次）
+    if (daysRemaining <= 0) {
+      const alreadyNotified = await env.DOMAIN_KV.get(notifyKey);
+      if (!alreadyNotified) {
+        console.log(`发送过期通知给：${info.domain}`);
+        await sendTelegramMessage(env.TGTOKEN, env.TGID, formatMessage(info, daysRemaining));
+        await env.DOMAIN_KV.put(notifyKey, "expired", { expirationTtl: 86400 * 30 }); // 记录通知，避免重复
+      }
+    }
+  }
+}
+
+// 格式化 Telegram 消息
+function formatMessage(info, daysRemaining) {
+  return `域名监控通知：
+  
+域名: ${info.domain}
+注册商: ${info.system}
+注册时间: ${info.registrationDate}
+过期时间: ${info.expirationDate}
+剩余天数: ${daysRemaining}天`;
+}
+
+// 发送 Telegram 消息
+async function sendTelegramMessage(token, chatId, message) {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text: message }),
+  });
+
+  const data = await response.json();
+  if (!data.ok) {
+    console.error("发送通知失败", data);
+  } else {
+    console.log("发送通知成功");
+  }
+}
+
+// 登录界面
+function generateLoginPage(SITENAME) {
+  return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>登录 - ${SITENAME}</title>
+      <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        .login-container { max-width: 300px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; }
+        button { width: 100%; padding: 10px; background-color: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer; }
+      </style>
+    </head>
+    <body>
+      <div class="login-container">
+        <h2>登录</h2>
+        <input type="password" id="password" placeholder="输入密码">
+        <button onclick="login()">登录</button>
+      </div>
+      <script>
+        function login() {
+          const password = document.getElementById('password').value;
+          if (password) {
+            window.location = '?password=' + encodeURIComponent(password);
+          } else {
+            alert('请输入密码');
+          }
+        }
+      </script>
+    </body>
+    </html>
+  `;
+}
+
+// 生成 HTML 页面
+async function generateHTML(domains, SITENAME) {
+  const siteIcon = "https://pan.811520.xyz/icon/domain.png";
+  const bgimgURL = "https://bing.img.run/1920x1080.php";
+
+  const rows = domains.map((info) => {
+    const registrationDate = new Date(info.registrationDate);
+    const expirationDate = new Date(info.expirationDate);
+    const today = new Date();
+    const totalDays = (expirationDate - registrationDate) / (1000 * 60 * 60 * 24);
+    const daysElapsed = (today - registrationDate) / (1000 * 60 * 60 * 24);
+    const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / totalDays) * 100));
+    const daysRemaining = Math.ceil((expirationDate - today) / (1000 * 60 * 60 * 24));
+    const isExpired = today > expirationDate;
+    const statusColor = isExpired ? "#e74c3c" : "#2ecc71";
+    const statusText = isExpired ? "已过期" : "正常";
+
+    return `
+      <tr>
+        <td><span class="status-dot" style="background-color: ${statusColor};" title="${statusText}"></span></td>
+        <td>${info.domain}</td>
+        <td><a href="${info.systemURL}" target="_blank">${info.system}</a></td>
+        <td>${info.registrationDate}</td>
+        <td>${info.expirationDate}</td>
+        <td>${isExpired ? "已过期" : daysRemaining + " 天"}</td>
+        <td>
+          <div class="progress-bar">
+            <div class="progress" style="width: ${progressPercentage}%;"></div>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+
+  return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${SITENAME}</title>
+      <link rel="icon" href="${siteIcon}" type="image/png">
+      <style>
+        body { font-family: Arial, sans-serif; background-image: url('${bgimgURL}'); color: #333; }
+        .container { width: 90%; max-width: 1200px; margin: auto; background-color: rgba(255, 255, 255, 0.7); padding: 20px; border-radius: 5px; }
+        h1 { background-color: #3498db; color: white; padding: 10px; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .progress-bar { width: 100%; background-color: #e0e0e0; border-radius: 4px; overflow: hidden; }
+        .progress { height: 20px; background-color: #3498db; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>${SITENAME}</h1>
+        <table>
+          <thead>
+            <tr><th>状态</th><th>域名</th><th>注册商</th><th>注册时间</th><th>过期时间</th><th>剩余天数</th><th>使用进度</th></tr>
+          </thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>
+      </div>
+    </body>
+    </html>
+  `;
+}
